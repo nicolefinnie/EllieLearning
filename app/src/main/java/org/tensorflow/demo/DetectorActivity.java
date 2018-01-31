@@ -27,6 +27,7 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.media.ImageReader.OnImageAvailableListener;
 import android.os.SystemClock;
+import android.speech.tts.TextToSpeech;
 import android.util.Size;
 import android.util.TypedValue;
 import android.widget.Toast;
@@ -38,13 +39,16 @@ import org.tensorflow.demo.env.Logger;
 import org.tensorflow.demo.tracking.MultiBoxTracker;
 
 import java.io.IOException;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Vector;
+import java.util.Locale;
 
 /**
- * An activity that uses a TensorFlowMultiBoxDetector and ObjectTracker to detect and then track
+ * An activity that uses a TensorflowYoloDetector to detect and then track
  * objects.
+ *
  */
 public class DetectorActivity extends CameraActivity implements OnImageAvailableListener {
   private static final Logger LOGGER = new Logger();
@@ -65,26 +69,19 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
       "file:///android_asset/ssd_mobilenet_v1_android_export.pb";
   private static final String TF_OD_API_LABELS_FILE = "file:///android_asset/coco_labels_list.txt";
 
-  // Configuration values for tiny-yolo-voc. Note that the graph is not included with TensorFlow and
-  // must be manually placed in the assets/ directory by the user.
-  // Graphs and models downloaded from http://pjreddie.com/darknet/yolo/ may be converted e.g. via
-  // DarkFlow (https://github.com/thtrieu/darkflow). Sample command:
-  // ./flow --model cfg/tiny-yolo-voc.cfg --load bin/tiny-yolo-voc.weights --savepb --verbalise
   private static final String YOLO_MODEL_FILE = "file:///android_asset/tiny-yolo.pb";
   private static final int YOLO_INPUT_SIZE = 416;
   private static final String YOLO_INPUT_NAME = "input";
   private static final String YOLO_OUTPUT_NAMES = "output";
   private static final int YOLO_BLOCK_SIZE = 32;
 
-  // Which detection model to use: by default uses Tensorflow Object Detection API frozen
-  // checkpoints.  Optionally use legacy Multibox (trained using an older version of the API)
-  // or YOLO.
+  // Which detection model to use, YOLO by default
   private enum DetectorMode {
     TF_OD_API, MULTIBOX, YOLO;
   }
   private static final DetectorMode MODE = DetectorMode.YOLO;
 
-  // Minimum detection confidence to track a detection.
+  // Minimum detection confidence / threshold to track a detection.
   private static final float MINIMUM_CONFIDENCE_TF_OD_API = 0.6f;
   private static final float MINIMUM_CONFIDENCE_MULTIBOX = 0.1f;
   private static final float MINIMUM_CONFIDENCE_YOLO = 0.25f;
@@ -117,7 +114,11 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
   private byte[] luminanceCopy;
 
   private BorderedText borderedText;
-  @Override
+
+  private TextToSpeech tts;
+
+
+    @Override
   public void onPreviewSizeChosen(final Size size, final int rotation) {
     final float textSizePx =
         TypedValue.applyDimension(
@@ -126,6 +127,22 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
     borderedText.setTypeface(Typeface.MONOSPACE);
 
     tracker = new MultiBoxTracker(this);
+
+    tts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+        @Override
+        public void onInit(int status) {
+            if (status == TextToSpeech.SUCCESS) {
+                int result = tts.setLanguage(Locale.CANADA);
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    LOGGER.e("TTS", "This Language is not supported");
+                }
+                LOGGER.i("Successfully initialized speech to text");
+            } else {
+                LOGGER.e("TTS", "Initialization of speech To text Failed!");
+            }
+        }
+    });
+
 
     int cropSize = TF_OD_API_INPUT_SIZE;
     if (MODE == DetectorMode.YOLO) {
@@ -190,6 +207,8 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
           @Override
           public void drawCallback(final Canvas canvas) {
             tracker.draw(canvas);
+
+
             if (isDebug()) {
               tracker.drawDebug(canvas);
             }
@@ -311,22 +330,34 @@ public class DetectorActivity extends CameraActivity implements OnImageAvailable
             final List<Classifier.Recognition> mappedRecognitions =
                 new LinkedList<Classifier.Recognition>();
 
+
             for (final Classifier.Recognition result : results) {
               final RectF location = result.getLocation();
+
               if (location != null && result.getConfidence() >= minimumConfidence) {
                 canvas.drawRect(location, paint);
-
                 cropToFrameTransform.mapRect(location);
                 result.setLocation(location);
                 mappedRecognitions.add(result);
+
               }
             }
+
+//FIXME just prototype
+            for (Classifier.Recognition recognition: mappedRecognitions) {
+                if (recognition.getConfidence() > 0.5f) {
+                    tts.speak("Ellie, this is a " + recognition.getTitle(), TextToSpeech.QUEUE_FLUSH, null, null);
+                }
+
+            }
+
 
             tracker.trackResults(mappedRecognitions, luminanceCopy, currTimestamp);
             trackingOverlay.postInvalidate();
 
             requestRender();
             computingDetection = false;
+
           }
         });
   }
